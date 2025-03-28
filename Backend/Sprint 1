@@ -1,0 +1,51 @@
+""""
+Sam Delgado-Leija
+1784791
+CIS 2368 
+Final Project Sprint 1
+"""
+
+# Start Flask API here/imports
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import generate_password_hash
+from datetime import datetime
+
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///library.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+
+
+# Tables (Book, customer, borrowing record)
+class Book(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    author = db.Column(db.String(255), nullable=False)
+    genre = db.Column(db.String(100), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='available')
+
+class Customer(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    firstname = db.Column(db.String(100), nullable=False)
+    lastname = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    passwordhash = db.Column(db.String(255), nullable=False)
+
+    def set_password(self, password):
+        self.passwordhash = generate_password_hash(password, method='sha256')
+
+class BorrowingRecord(db.Model):
+    ID = db.Column(db.Integer, primary_key=True)
+    bookID = db.Column(db.Integer, db.ForeignKey('book.id'), nullable=False)
+    customerID = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
+    borrowdate = db.Column(db.Date, nullable=False)
+    returndate = db.Column(db.Date, nullable=True)
+    late_fee = db.Column(db.Float, default=0.0)
+
+db.create_all()
+
+# Formatting function (to avoid in-line formatting)
+def format_query_result(result, fields):
+    return [{field: getattr(obj, field) for field in fields} for obj in result]
