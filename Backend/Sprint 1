@@ -5,47 +5,104 @@ CIS 2368
 Final Project Sprint 1
 """
 
-# Start Flask API here/imports
 from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
+import mysql.connector
 from werkzeug.security import generate_password_hash
 from datetime import datetime
-
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///library.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
 
 
 
-# Tables (Book, customer, borrowing record)
-class Book(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(255), nullable=False)
-    author = db.Column(db.String(255), nullable=False)
-    genre = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(20), nullable=False, default='available')
 
-class Customer(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    firstname = db.Column(db.String(100), nullable=False)
-    lastname = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(255), unique=True, nullable=False)
-    passwordhash = db.Column(db.String(255), nullable=False)
+# Database connection
+connection = mysql.connector.connect(
+    host='cis2368.czg0amyoktl7.us-east-2.rds.amazonaws.com',
+    database='CIS2368springDB',
+    user='admin',
+    password='AWSPass832!'
+)
+cursor = connection.cursor(dictionary=True)
 
-    def set_password(self, password):
-        self.passwordhash = generate_password_hash(password, method='sha256')
+# Function to execute queries
+def execute_query(query, values=None, fetch=False):
+    cursor.execute(query, values) if values else cursor.execute(query)
+    if fetch:
+        return cursor.fetchall()
+    connection.commit()
 
-class BorrowingRecord(db.Model):
-    ID = db.Column(db.Integer, primary_key=True)
-    bookID = db.Column(db.Integer, db.ForeignKey('book.id'), nullable=False)
-    customerID = db.Column(db.Integer, db.ForeignKey('customer.id'), nullable=False)
-    borrowdate = db.Column(db.Date, nullable=False)
-    returndate = db.Column(db.Date, nullable=True)
-    late_fee = db.Column(db.Float, default=0.0)
 
-db.create_all()
 
-# Formatting function (to avoid in-line formatting)
-def format_query_result(result, fields):
-    return [{field: getattr(obj, field) for field in fields} for obj in result]
+
+
+# API routes
+@app.route('/api/books', methods=['GET', 'POST'])
+def manage_books():     #Handles retrieving all books and adding new books
+    if request.method == 'POST':
+        data = request.json
+        query = "INSERT INTO books (title, author, genre, status) VALUES (%s, %s, %s, 'available')"
+        execute_query(query, (data['title'], data['author'], data['genre']))
+        return jsonify({'message': 'Book added successfully'}), 201
+    
+    books = execute_query("SELECT * FROM books", fetch=True)
+    return jsonify(books)
+
+
+@app.route('/api/customers', methods=['GET', 'POST'])
+def manage_customers():     #Handles retrieving all customers and adding new customers with hashed passwords
+    if request.method == 'POST':
+        data = request.json
+        hashed_password = generate_password_hash(data['password'], method='sha256')
+        query = "INSERT INTO customers (firstname, lastname, email, passwordhash) VALUES (%s, %s, %s, %s)"
+        execute_query(query, (data['firstname'], data['lastname'], data['email'], hashed_password))
+        return jsonify({'message': 'Customer added successfully'}), 201
+    
+    customers = execute_query("SELECT id, firstname, lastname, email FROM customers", fetch=True)
+    return jsonify(customers)
+
+
+@app.route('/api/borrow', methods=['POST'])
+def borrow_book():     #Allows a customer to borrow a book if eligible
+    data = request.json
+    borrow_date = datetime.strptime(data['borrowdate'], '%Y-%m-%d').date()
+    
+    book = execute_query("SELECT * FROM books WHERE id = %s AND status = 'available'", (data['bookid'],), fetch=True)
+    customer = execute_query("SELECT * FROM customers WHERE id = %s", (data['customerid'],), fetch=True)
+    has_borrowed = execute_query("SELECT * FROM borrowingrecords WHERE customerid = %s AND returndate IS NULL", (data['customerid'],), fetch=True)
+    
+    if not book or not customer or has_borrowed:
+        return jsonify({'error': 'Invalid request'}), 400
+    
+    execute_query("INSERT INTO borrowingrecords (bookid, customerid, borrowdate) VALUES (%s, %s, %s)",
+                  (data['bookid'], data['customerid'], borrow_date))
+    execute_query("UPDATE books SET status = 'unavailable' WHERE id = %s", (data['bookid'],))
+    
+    return jsonify({'message': 'Book borrowed successfully'}), 201
+
+
+@app.route('/api/return/<int:borrow_id>', methods=['PUT'])
+def return_book(borrow_id):     #Handles returning a borrowed book and calculates late fees
+    return_date = datetime.strptime(request.json['returndate'], '%Y-%m-%d').date()
+    
+    borrowing = execute_query("SELECT * FROM borrowingrecords WHERE id = %s", (borrow_id,), fetch=True)
+    if not borrowing:
+        return jsonify({'error': 'Record not found'}), 404
+    
+    borrowing = borrowing[0]
+    late_days = max(0, (return_date - borrowing['borrowdate']).days - 10)
+    late_fee = late_days * 1.0
+    
+    execute_query("UPDATE borrowingrecords SET returndate = %s, late_fee = %s WHERE id = %s",
+                  (return_date, late_fee, borrow_id))
+    execute_query("UPDATE books SET status = 'available' WHERE id = %s", (borrowing['bookid'],))
+    
+    return jsonify({'message': 'Book returned successfully', 'late_fee': late_fee})
+
+
+@app.route('/api/borrowings', methods=['GET'])
+def get_borrowings():
+    borrowings = execute_query("SELECT * FROM borrowingrecords", fetch=True)
+    return jsonify(borrowings)
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
